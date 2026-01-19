@@ -3,7 +3,12 @@ import { env } from '$env/dynamic/private';
 import { getRun } from '$lib/server/run-store';
 
 export const POST = async ({ request }) => {
-	const payload = (await request.json()) as { runId?: string };
+	let payload: { runId?: string };
+	try {
+		payload = (await request.json()) as { runId?: string };
+	} catch {
+		return json({ error: 'Invalid JSON payload.' }, { status: 400 });
+	}
 	if (!payload.runId) {
 		return json({ error: 'Missing runId.' }, { status: 400 });
 	}
@@ -16,11 +21,14 @@ export const POST = async ({ request }) => {
 	if (!run) {
 		return json({ error: 'Run not found.' }, { status: 404 });
 	}
+	if (run.paidAt) {
+		return json({ error: 'Run is already paid.' }, { status: 409 });
+	}
 
 	const origin = new URL(request.url).origin;
 	const params = new URLSearchParams();
 	params.set('mode', 'payment');
-	params.set('success_url', `${origin}/?checkout=success&runId=${payload.runId}`);
+	params.set('success_url', `${origin}/success?runId=${payload.runId}`);
 	params.set('cancel_url', `${origin}/?checkout=cancel&runId=${payload.runId}`);
 	params.set('line_items[0][price]', env.STRIPE_PRICE_ID);
 	params.set('line_items[0][quantity]', '1');
@@ -31,7 +39,8 @@ export const POST = async ({ request }) => {
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
-			'Content-Type': 'application/x-www-form-urlencoded'
+			'Content-Type': 'application/x-www-form-urlencoded',
+			'Idempotency-Key': `checkout-${payload.runId}`
 		},
 		body: params.toString()
 	});

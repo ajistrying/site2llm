@@ -1,3 +1,4 @@
+import { env } from '$env/dynamic/private';
 import { buildStubPages, buildTemplate, parseCategories, slugify, type PageItem, type SurveyInput } from '$lib/llms';
 
 type FirecrawlResponse = {
@@ -11,9 +12,6 @@ type FirecrawlResponse = {
 		};
 	}>;
 };
-
-const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
-const USE_STUB = process.env.FIRECRAWL_USE_STUB !== 'false';
 
 const toSentence = (value: string) => value.replace(/\s+/g, ' ').trim();
 
@@ -84,7 +82,7 @@ const crawlWithFirecrawl = async (input: SurveyInput, apiKey: string): Promise<P
 };
 
 export const generateLlms = async (input: SurveyInput) => {
-	if (!FIRECRAWL_API_KEY || USE_STUB) {
+	if (!env.FIRECRAWL_API_KEY) {
 		const pages = buildStubPages(input);
 		return {
 			preview: buildTemplate(input, pages),
@@ -95,7 +93,7 @@ export const generateLlms = async (input: SurveyInput) => {
 
 	let pages: PageItem[] = [];
 	try {
-		pages = await crawlWithFirecrawl(input, FIRECRAWL_API_KEY);
+		pages = await crawlWithFirecrawl(input, env.FIRECRAWL_API_KEY);
 	} catch (error) {
 		pages = buildStubPages(input);
 		return {

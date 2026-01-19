@@ -1,43 +1,50 @@
 import devtoolsJson from 'vite-plugin-devtools-json';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
-import { playwright } from '@vitest/browser-playwright';
 import { sveltekit } from '@sveltejs/kit/vite';
 
-export default defineConfig({
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson()],
+export default defineConfig(async () => {
+	const browserEnabled = Boolean(process.env.VITEST_BROWSER);
+	const projects = [];
 
-	test: {
-		expect: { requireAssertions: true },
+	if (browserEnabled) {
+		const { playwright } = await import('@vitest/browser-playwright');
 
-		projects: [
-			{
-				extends: './vite.config.ts',
+		projects.push({
+			extends: './vite.config.ts',
 
-				test: {
-					name: 'client',
+			test: {
+				name: 'client',
 
-					browser: {
-						enabled: true,
-						provider: playwright(),
-						instances: [{ browser: 'chromium', headless: true }]
-					},
+				browser: {
+					enabled: true,
+					provider: playwright(),
+					instances: [{ browser: 'chromium', headless: true }]
+				},
 
-					include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
-					exclude: ['src/lib/server/**']
-				}
-			},
-
-			{
-				extends: './vite.config.ts',
-
-				test: {
-					name: 'server',
-					environment: 'node',
-					include: ['src/**/*.{test,spec}.{js,ts}'],
-					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
-				}
+				include: ['src/**/*.svelte.{test,spec}.{js,ts}'],
+				exclude: ['src/lib/server/**']
 			}
-		]
+		});
 	}
+
+	projects.push({
+		extends: './vite.config.ts',
+
+		test: {
+			name: 'server',
+			environment: 'node',
+			include: ['src/**/*.{test,spec}.{js,ts}'],
+			exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
+		}
+	});
+
+	return {
+		plugins: [tailwindcss(), sveltekit(), devtoolsJson()],
+
+		test: {
+			expect: { requireAssertions: true },
+			projects
+		}
+	};
 });

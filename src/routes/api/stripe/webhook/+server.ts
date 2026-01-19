@@ -66,11 +66,24 @@ export const POST = async ({ request }) => {
 
 	const event = JSON.parse(payload) as {
 		type?: string;
-		data?: { object?: { metadata?: Record<string, string>; client_reference_id?: string } };
+		data?: {
+			object?: {
+				metadata?: Record<string, string>;
+				client_reference_id?: string;
+				payment_status?: string;
+			};
+		};
 	};
 
-	if (event.type === 'checkout.session.completed') {
+	if (
+		event.type === 'checkout.session.completed' ||
+		event.type === 'checkout.session.async_payment_succeeded'
+	) {
 		const session = event.data?.object;
+		const paymentStatus = session?.payment_status;
+		if (paymentStatus && paymentStatus !== 'paid') {
+			return json({ received: true });
+		}
 		const runId = session?.metadata?.run_id ?? session?.client_reference_id;
 		if (runId) {
 			await markRunPaid(runId);

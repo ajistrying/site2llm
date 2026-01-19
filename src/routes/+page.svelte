@@ -20,16 +20,17 @@
 
 	const steps = [
 		{
-			title: "Share what matters",
-			description: "Name, summary, key pages, sections, and exclusions.",
+			title: "Tell us what AI should get right",
+			description: "Share your homepage, key pages, and questions so we prioritize the answers.",
 		},
 		{
-			title: "Firecrawl the high-value pages",
-			description: "We rank pages and summarize only the ones that matter.",
+			title: "We crawl only the pages you pick",
+			description:
+				"Send 3-8 priority URLs plus optional pages as full links or /paths, separated by commas or new lines.",
 		},
 		{
-			title: "Publish in minutes",
-			description: "Download llms.txt and follow the short upload checklist.",
+			title: "Preview first, pay once, then publish",
+			description: "Review the preview, unlock the file with one payment, and upload in minutes.",
 		},
 	];
 
@@ -40,6 +41,17 @@
 	];
 
 	const SURVEY_STORAGE_KEY = "site2llm-survey";
+	const RUN_STORAGE_KEY = "site2llm-run";
+
+	type StoredRun = {
+		runId: string;
+		preview?: string;
+		lockedPreview?: string;
+		mode?: string;
+		paymentProvider?: string;
+		updatedAt: number;
+		paid?: boolean;
+	};
 
 	const siteTypeOptions: Array<{ value: SiteType; label: string }> = [
 		{ value: "docs", label: "Documentation" },
@@ -91,12 +103,95 @@
 	let paymentStatus: "locked" | "processing" | "paid" | "error" = $state("locked");
 	let preferredStep = $state(1);
 	let storageReady = $state(false);
+	let storedRun: StoredRun | null = $state(null);
+	let runIdLookupOpen = $state(false);
+	let runIdLookupValue = $state("");
+	let runIdLookupError = $state("");
+
+	const RUN_RETENTION_DAYS = 30;
+
+	const safeStorage = {
+		get(key: string) {
+			if (typeof localStorage === "undefined") return null;
+			try {
+				return localStorage.getItem(key);
+			} catch {
+				return null;
+			}
+		},
+		set(key: string, value: string) {
+			if (typeof localStorage === "undefined") return false;
+			try {
+				localStorage.setItem(key, value);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+		remove(key: string) {
+			if (typeof localStorage === "undefined") return false;
+			try {
+				localStorage.removeItem(key);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+	};
 
 	const scrollToSurvey = () => {
 		const target = document.getElementById("survey");
 		if (target) {
 			target.scrollIntoView({ behavior: "smooth", block: "start" });
 		}
+	};
+
+	const openRunIdLookup = () => {
+		runIdLookupOpen = true;
+		runIdLookupValue = "";
+		runIdLookupError = "";
+	};
+
+	const closeRunIdLookup = () => {
+		runIdLookupOpen = false;
+		runIdLookupError = "";
+	};
+
+	const submitRunIdLookup = (event?: SubmitEvent) => {
+		event?.preventDefault();
+		const trimmed = runIdLookupValue.trim();
+		if (!trimmed) {
+			runIdLookupError = "Enter a Run ID to continue.";
+			return;
+		}
+		runIdLookupError = "";
+		window.location.href = `/success?runId=${encodeURIComponent(trimmed)}`;
+	};
+
+	const handleLookupKeydown = (event: KeyboardEvent) => {
+		if (event.key === "Escape") {
+			closeRunIdLookup();
+		}
+	};
+
+	const stopModalClick = (event: Event) => {
+		event.stopPropagation();
+	};
+
+	const startNewRun = () => {
+		storedRun = null;
+		if (storageReady) {
+			safeStorage.remove(RUN_STORAGE_KEY);
+		}
+		status = "idle";
+		statusMessage = "";
+		llmsPreview = "";
+		llmsLocked = "";
+		runId = null;
+		crawlMode = "";
+		paymentStatus = "locked";
+		preferredStep = 1;
+		scrollToSurvey();
 	};
 
 	const buildPayload = (): SurveyInput => ({
@@ -165,6 +260,11 @@
 	const step3Locked = $derived(!step2Complete);
 	const formComplete = $derived(step1Complete && step2Complete && step3Complete);
 	const currentStep = $derived.by(() => {
+		// 0 means all collapsed (after generation)
+		if (preferredStep === 0) {
+			return 0;
+		}
+
 		if (preferredStep === 3 && step3Locked) {
 			return step2Locked ? 1 : 2;
 		}
@@ -192,17 +292,71 @@
 		}
 	};
 	const persistSurvey = () => {
-		if (!storageReady || typeof localStorage === "undefined") return;
-		localStorage.setItem(SURVEY_STORAGE_KEY, JSON.stringify(buildPayload()));
+		if (!storageReady) return;
+		safeStorage.set(SURVEY_STORAGE_KEY, JSON.stringify(buildPayload()));
+	};
+
+	const persistRun = (run: StoredRun | null) => {
+		storedRun = run;
+		if (!storageReady) return;
+		if (!run) {
+			safeStorage.remove(RUN_STORAGE_KEY);
+			return;
+		}
+		safeStorage.set(RUN_STORAGE_KEY, JSON.stringify(run));
+	};
+
+	const hydrateRun = (run: StoredRun, message?: string) => {
+		runId = run.runId;
+		llmsPreview = run.preview ?? "";
+		llmsLocked = run.lockedPreview ?? "";
+		crawlMode = run.mode ?? "";
+		paymentProvider = run.paymentProvider ?? "Stripe Checkout";
+		status = "ready";
+		if (message) {
+			statusMessage = message;
+		}
+	};
+
+	const syncPaymentStatus = async (targetRunId: string) => {
+		try {
+			const response = await fetch(`/api/run?runId=${targetRunId}`);
+			if (!response.ok) return;
+			const data = (await response.json()) as { paid?: boolean };
+			if (data.paid) {
+				paymentStatus = "paid";
+				statusMessage = "Payment received. Download your llms.txt below.";
+				if (runId) {
+					persistRun({
+						runId,
+						preview: llmsPreview,
+						lockedPreview: llmsLocked,
+						mode: crawlMode,
+						paymentProvider,
+						updatedAt: Date.now(),
+						paid: true,
+					});
+				}
+			} else {
+				paymentStatus = "locked";
+			}
+		} catch {
+			// Ignore network errors
+		}
+	};
+
+	const restoreStoredRun = () => {
+		if (!storedRun) return;
+		statusMessage = "";
+		paymentStatus = storedRun.paid ? "paid" : "locked";
+		hydrateRun(storedRun, "Recovered your last run.");
+		if (!storedRun.paid) {
+			void syncPaymentStatus(storedRun.runId);
+		}
 	};
 
 	onMount(() => {
-		if (typeof localStorage === "undefined") {
-			storageReady = true;
-			return;
-		}
-
-		const raw = localStorage.getItem(SURVEY_STORAGE_KEY);
+		const raw = safeStorage.get(SURVEY_STORAGE_KEY);
 		if (raw) {
 			try {
 				const saved = JSON.parse(raw) as Partial<SurveyInput>;
@@ -225,6 +379,30 @@
 			}
 		}
 
+		const stored = safeStorage.get(RUN_STORAGE_KEY);
+		if (stored) {
+			try {
+				const parsed = JSON.parse(stored) as Partial<StoredRun>;
+				if (typeof parsed.runId === "string" && parsed.runId) {
+					storedRun = {
+						runId: parsed.runId,
+						preview: typeof parsed.preview === "string" ? parsed.preview : "",
+						lockedPreview:
+							typeof parsed.lockedPreview === "string" ? parsed.lockedPreview : "",
+						mode: typeof parsed.mode === "string" ? parsed.mode : "",
+						paymentProvider:
+							typeof parsed.paymentProvider === "string"
+								? parsed.paymentProvider
+								: "Stripe Checkout",
+						updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
+						paid: Boolean(parsed.paid),
+					};
+				}
+			} catch {
+				// Ignore malformed storage.
+			}
+		}
+
 		preferredStep = step2Complete ? 3 : step1Complete ? 2 : 1;
 		storageReady = true;
 
@@ -233,39 +411,31 @@
 			const checkout = url.searchParams.get("checkout");
 			const checkoutRunId = url.searchParams.get("runId");
 
-			if (checkout && checkoutRunId) {
-				runId = checkoutRunId;
-				status = "ready";
+			// Handle checkout cancel (user returned from Stripe without paying)
+			if (checkout === "cancel" && checkoutRunId) {
+				const existingRun =
+					storedRun && storedRun.runId === checkoutRunId
+						? storedRun
+						: {
+								runId: checkoutRunId,
+								preview: "",
+								lockedPreview: "",
+								mode: "",
+								paymentProvider: "Stripe Checkout",
+								updatedAt: Date.now(),
+								paid: false,
+							};
 
-				if (checkout === "success") {
-					fetch(`/api/run?runId=${checkoutRunId}`)
-						.then(async (response) => {
-							if (!response.ok) throw new Error("Lookup failed.");
-							return (await response.json()) as { paid?: boolean };
-						})
-						.then((data) => {
-							if (data.paid) {
-								paymentStatus = "paid";
-								statusMessage = "Payment received. Download your llms.txt below.";
-							} else {
-								paymentStatus = "processing";
-								statusMessage = "Payment pending. Refresh in a moment.";
-							}
-						})
-						.catch(() => {
-							paymentStatus = "error";
-							statusMessage = "We could not confirm payment yet.";
-						});
-				}
-
-				if (checkout === "cancel") {
-					paymentStatus = "locked";
-					statusMessage = "Checkout canceled. You can try again anytime.";
-				}
+				paymentStatus = "locked";
+				hydrateRun(existingRun);
+				persistRun(existingRun);
+				statusMessage = "Checkout canceled. You can try again anytime.";
 
 				url.searchParams.delete("checkout");
 				url.searchParams.delete("runId");
 				window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+			} else if (storedRun && status === "idle") {
+				restoreStoredRun();
 			}
 		}
 	});
@@ -298,20 +468,49 @@
 				body: JSON.stringify(payload),
 			});
 
-			const data = await response.json();
+			const data = (await response.json().catch(() => null)) as
+				| {
+						errors?: Record<string, string>;
+						preview?: string;
+						lockedPreview?: string;
+						runId?: string;
+						mode?: string;
+						payment?: { provider?: string };
+				  }
+				| null;
 			if (!response.ok) {
-				formErrors = (data.errors ?? {}) as Record<string, string>;
+				formErrors = (data?.errors ?? {}) as Record<string, string>;
 				statusMessage = "Fix the highlighted fields to generate your llms.txt.";
 				status = "error";
 				return;
 			}
 
-			llmsPreview = data.preview ?? "";
-			llmsLocked = data.lockedPreview ?? "";
-			runId = data.runId ?? null;
-			crawlMode = data.mode ?? "";
-			paymentProvider = data.payment?.provider ?? "Stripe Checkout";
+			llmsPreview = data?.preview ?? "";
+			llmsLocked = data?.lockedPreview ?? "";
+			runId = data?.runId ?? null;
+			crawlMode = data?.mode ?? "";
+			paymentProvider = data?.payment?.provider ?? "Stripe Checkout";
 			status = "ready";
+			if (runId) {
+				persistRun({
+					runId,
+					preview: llmsPreview,
+					lockedPreview: llmsLocked,
+					mode: crawlMode,
+					paymentProvider,
+					updatedAt: Date.now(),
+					paid: false,
+				});
+			}
+
+			// Collapse form and scroll to preview section
+			preferredStep = 0;
+			setTimeout(() => {
+				const previewSection = document.getElementById("preview-section");
+				if (previewSection) {
+					previewSection.scrollIntoView({ behavior: "smooth", block: "start" });
+				}
+			}, 100);
 		} catch (error) {
 			statusMessage = "Generation failed. Try again in a moment.";
 			status = "error";
@@ -334,8 +533,8 @@
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ runId }),
 			});
-			const data = await response.json();
-			if (data.url) {
+			const data = (await response.json().catch(() => null)) as { url?: string } | null;
+			if (data?.url) {
 				window.location.href = data.url;
 				return;
 			}
@@ -362,7 +561,7 @@
 			link.href = url;
 			link.download = "llms.txt";
 			link.click();
-			URL.revokeObjectURL(url);
+			setTimeout(() => URL.revokeObjectURL(url), 1000);
 		} catch (error) {
 			statusMessage = "Download failed. Try again in a moment.";
 		}
@@ -401,7 +600,15 @@
 				<button class="btn primary" type="button" onclick={scrollToSurvey}>
 					Generate llms.txt
 				</button>
-				<div class="text-sm text-[color:var(--muted)]">
+				<button
+					class="btn ghost"
+					type="button"
+					title="Use this if you already have a Run ID. It’s the code from a previous run that lets you re-download."
+					onclick={openRunIdLookup}
+				>
+					Re-download with Run ID
+				</button>
+				<div class="text-lg text-[color:var(--muted)]">
 					One-time ${PRICE_USD}. Pay after generation via {paymentProvider}.
 				</div>
 			</div>
@@ -419,7 +626,7 @@
 		<section class="grid gap-8 lg:grid-cols-[0.9fr,1.1fr]">
 			<div class="reveal" style="--delay: 120ms">
 				<p class="eyebrow">How it works</p>
-				<h2 class="display text-3xl">Short survey. Targeted crawl. Clear output.</h2>
+				<h2 class="display text-3xl">Preview before you pay, publish in minutes.</h2>
 			</div>
 			<div class="grid gap-4">
 				{#each steps as step, index (step.title)}
@@ -755,7 +962,7 @@
 							type="submit"
 							disabled={!formComplete || status === "generating"}
 						>
-							{status === "generating" ? "Generating..." : "Generate llms.txt"}
+							{status === "generating" ? "Generating..." : "Generate llms.txt file"}
 						</button>
 						{#if !formComplete}
 							<p class="text-xs text-[color:var(--muted)]">
@@ -769,19 +976,28 @@
 				</form>
 			</div>
 
-			<div class="reveal preview" style="--delay: 180ms">
+			<div id="preview-section" class="reveal preview" style="--delay: 180ms">
 				<div class="flex items-center justify-between">
 					<p class="eyebrow">llms.txt preview</p>
-					{#if crawlMode}
-						<span class="pill"
-							>{crawlMode === "live" ? "Firecrawl live" : "Stub crawl"}</span
-						>
-					{/if}
 				</div>
 				{#if status === "idle"}
 					<p class="mt-4 text-[color:var(--muted)]">
 						Fill the survey to generate your preview.
 					</p>
+					{#if storedRun}
+						<div class="resume-card mt-4">
+							<p class="text-sm font-semibold">Resume your last run</p>
+							<p class="text-xs text-[color:var(--muted)]">
+								Last saved {new Date(storedRun.updatedAt).toLocaleString()} · Run ID:
+								{storedRun.runId}
+							</p>
+							<div class="mt-3 flex flex-wrap gap-2">
+								<button class="btn ghost" type="button" onclick={restoreStoredRun}>
+									Restore
+								</button>
+							</div>
+						</div>
+					{/if}
 				{:else if status === "generating"}
 					<p class="mt-4 text-[color:var(--muted)]">Generating your llms.txt...</p>
 				{:else if status === "error"}
@@ -847,6 +1063,11 @@
 								</p>
 							{/if}
 						{/if}
+						{#if storedRun}
+							<button class="btn ghost" type="button" onclick={startNewRun}>
+								Start a new run
+							</button>
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -882,6 +1103,57 @@
 			<div class="footer-note">Made by Wellington Johnson.</div>
 		</footer>
 	</div>
+	{#if runIdLookupOpen}
+		<div
+			class="modal-backdrop"
+			role="presentation"
+			onpointerdown={closeRunIdLookup}
+			onkeydown={handleLookupKeydown}
+		>
+			<div
+				class="modal-panel card"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="run-id-title"
+				tabindex="-1"
+				onpointerdown={stopModalClick}
+			>
+				<div class="modal-header">
+					<h2 id="run-id-title" class="display text-2xl">Re-download your llms.txt</h2>
+					<button class="modal-close" type="button" onclick={closeRunIdLookup} aria-label="Close">
+						×
+					</button>
+				</div>
+				<p class="modal-copy">
+					Enter the Run ID from your receipt or success page. We keep paid runs for
+					{RUN_RETENTION_DAYS} days.
+				</p>
+				<form class="modal-form grid gap-4" onsubmit={submitRunIdLookup}>
+					<label class="field">
+						<div class="field-label">
+							<span>Run ID</span>
+						</div>
+						<input
+							bind:value={runIdLookupValue}
+							type="text"
+							placeholder="run_1234..."
+							autocomplete="off"
+							oninput={() => (runIdLookupError = "")}
+						/>
+						{#if runIdLookupError}
+							<span class="error">{runIdLookupError}</span>
+						{/if}
+					</label>
+					<div class="modal-actions">
+						<button class="btn ghost" type="button" onclick={closeRunIdLookup}>
+							Cancel
+						</button>
+						<button class="btn primary" type="submit">Open download</button>
+					</div>
+				</form>
+			</div>
+		</div>
+	{/if}
 </main>
 
 <style>
@@ -921,9 +1193,12 @@
 		border-radius: 999px;
 		padding: 0.75rem 1.5rem;
 		font-weight: 600;
+		cursor: pointer;
 		transition:
 			transform 0.2s ease,
-			box-shadow 0.2s ease;
+			box-shadow 0.2s ease,
+			background 0.2s ease,
+			border-color 0.2s ease;
 	}
 
 	.btn:disabled {
@@ -937,15 +1212,27 @@
 		box-shadow: var(--shadow);
 	}
 
-	.btn.primary:hover {
+	.btn.primary:hover:not(:disabled) {
 		transform: translateY(-2px);
 		box-shadow: 0 22px 60px rgba(15, 118, 110, 0.3);
 	}
 
 	.btn.ghost {
-		border: 1px solid rgba(79, 70, 60, 0.2);
+		border: 1px solid rgba(79, 70, 60, 0.3);
 		background: #fffaf3;
 		color: var(--ink);
+	}
+
+	.btn.ghost:not(:disabled) {
+		border-color: var(--accent);
+		background: var(--accent-soft);
+		color: var(--accent-dark);
+	}
+
+	.btn.ghost:hover:not(:disabled) {
+		background: var(--accent);
+		color: #fffaf3;
+		transform: translateY(-1px);
 	}
 
 	.card {
@@ -1222,6 +1509,22 @@
 		backdrop-filter: blur(10px);
 	}
 
+	.resume-card {
+		border-radius: 16px;
+		border: 1px dashed rgba(79, 70, 60, 0.3);
+		background: rgba(255, 250, 243, 0.7);
+		padding: 1rem;
+		display: grid;
+		gap: 0.4rem;
+	}
+
+	.meta-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.6rem;
+	}
+
 	.preview-shell {
 		position: relative;
 	}
@@ -1284,6 +1587,52 @@
 
 	.overlay-card .btn {
 		width: 100%;
+	}
+
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(17, 16, 14, 0.45);
+		backdrop-filter: blur(4px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1.5rem;
+		z-index: 50;
+	}
+
+	.modal-panel {
+		width: min(100%, 30rem);
+		display: grid;
+		gap: 1rem;
+	}
+
+	.modal-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+
+	.modal-copy {
+		color: var(--muted);
+		font-size: 0.9rem;
+	}
+
+	.modal-close {
+		border: none;
+		background: transparent;
+		color: var(--muted);
+		font-size: 1.5rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+
+	.modal-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		justify-content: flex-end;
 	}
 
 	pre {
