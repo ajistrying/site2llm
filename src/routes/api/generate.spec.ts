@@ -50,7 +50,12 @@ describe('POST /api/generate', () => {
 		createRun.mockResolvedValueOnce(mockRun);
 
 		const response = await POST({ request: makeRequest(validPayload) } as any);
-		const data = await response.json();
+		const data = (await response.json()) as {
+			runId?: string;
+			preview?: string;
+			lockedPreview?: string;
+			error?: string;
+		};
 
 		expect(response.status).toBe(200);
 		expect(data.runId).toBe('run_123');
@@ -64,7 +69,7 @@ describe('POST /api/generate', () => {
 		createRun.mockResolvedValueOnce(null);
 
 		const response = await POST({ request: makeRequest(validPayload) } as any);
-		const data = await response.json();
+		const data = (await response.json()) as { error?: string };
 
 		expect(response.status).toBe(500);
 		expect(data.error).toBe('Failed to persist run.');
@@ -74,7 +79,7 @@ describe('POST /api/generate', () => {
 		generateLlms.mockRejectedValueOnce(new Error('boom'));
 
 		const response = await POST({ request: makeRequest(validPayload) } as any);
-		const data = await response.json();
+		const data = (await response.json()) as { error?: string };
 
 		expect(response.status).toBe(500);
 		expect(data.error).toBe('Failed to generate llms.txt.');

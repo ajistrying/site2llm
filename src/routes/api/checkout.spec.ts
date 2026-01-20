@@ -70,7 +70,7 @@ describe('POST /api/checkout', () => {
 		);
 
 		const response = await POST({ request: makeRequest({ runId: 'run_123' }) } as any);
-		const data = await response.json();
+		const data = (await response.json()) as { url?: string };
 
 		expect(response.status).toBe(200);
 		expect(data.url).toBe('https://checkout.test');

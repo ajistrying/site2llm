@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { generateLlms } from '$lib/server/firecrawl';
+import { CrawlUnavailableError, generateLlms } from '$lib/server/firecrawl';
 import { buildPreviewSlices } from '$lib/server/preview';
 import { createRun } from '$lib/server/run-store';
 import { PRICE_USD, validateSurvey, type SurveyInput } from '$lib/llms';
@@ -50,6 +50,9 @@ export const POST = async ({ request }) => {
 			}
 		});
 	} catch (error) {
+		if (error instanceof CrawlUnavailableError) {
+			return json({ error: error.message }, { status: 503 });
+		}
 		console.error('Generate error:', error);
 		return json({ error: 'Failed to generate llms.txt.' }, { status: 500 });
 	}

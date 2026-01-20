@@ -1,5 +1,15 @@
 import { env } from '$env/dynamic/private';
-import { buildStubPages, buildTemplate, parseCategories, slugify, type PageItem, type SurveyInput } from '$lib/llms';
+import { buildTemplate, parseCategories, slugify, type PageItem, type SurveyInput } from '$lib/llms';
+import { enrichPagesAndQuestions } from '$lib/server/llm-enrich';
+
+export class CrawlUnavailableError extends Error {
+	status = 503;
+
+	constructor(message = 'Crawling is temporarily unavailable. Please try again later.') {
+		super(message);
+		this.name = 'CrawlUnavailableError';
+	}
+}
 
 type FirecrawlResponse = {
 	success?: boolean;
@@ -59,10 +69,13 @@ const crawlWithFirecrawl = async (input: SurveyInput, apiKey: string): Promise<P
 	});
 
 	if (!response.ok) {
-		throw new Error('Firecrawl request failed.');
+		throw new CrawlUnavailableError('We could not crawl your site right now. Please try again.');
 	}
 
 	const payload = (await response.json()) as FirecrawlResponse;
+	if (!payload.success) {
+		throw new CrawlUnavailableError('We could not crawl your site right now. Please try again.');
+	}
 	const categories = parseCategories(input.categories);
 	const excludes = parseExcludes(input.excludes);
 
@@ -83,29 +96,25 @@ const crawlWithFirecrawl = async (input: SurveyInput, apiKey: string): Promise<P
 
 export const generateLlms = async (input: SurveyInput) => {
 	if (!env.FIRECRAWL_API_KEY) {
-		const pages = buildStubPages(input);
-		return {
-			preview: buildTemplate(input, pages),
-			pages,
-			mode: 'stub' as const
-		};
+		throw new CrawlUnavailableError('Crawling is temporarily unavailable. Please try again later.');
 	}
 
 	let pages: PageItem[] = [];
 	try {
 		pages = await crawlWithFirecrawl(input, env.FIRECRAWL_API_KEY);
 	} catch (error) {
-		pages = buildStubPages(input);
-		return {
-			preview: buildTemplate(input, pages),
-			pages,
-			mode: 'stub' as const
-		};
+		if (error instanceof CrawlUnavailableError) {
+			throw error;
+		}
+		throw new CrawlUnavailableError('We could not crawl your site right now. Please try again.');
 	}
 
+	const enrichment = await enrichPagesAndQuestions(input, pages);
+	const preview = buildTemplate({ ...input, questions: enrichment.questions }, enrichment.pages);
+
 	return {
-		preview: buildTemplate(input, pages),
-		pages,
+		preview,
+		pages: enrichment.pages,
 		mode: 'live' as const
 	};
 };

@@ -4,9 +4,9 @@
 
 	let { data } = $props();
 
-	let paid = $state(data.paid);
-	let content = $state(data.content);
-	let statusMessage = $state(data.paid ? 'Payment confirmed!' : 'Confirming payment...');
+	let paidOverride = $state<boolean | null>(null);
+	let contentOverride = $state<string | null>(null);
+	let statusOverride = $state<string | null>(null);
 	let pollAttempt = $state(0);
 	let pollFailed = $state(false);
 	let copyState = $state<'idle' | 'copied' | 'error'>('idle');
@@ -26,6 +26,12 @@
 			: `/success?runId=${encodeURIComponent(data.runId)}`,
 	);
 
+	const paid = $derived(paidOverride ?? data.paid ?? false);
+	const content = $derived(contentOverride ?? data.content ?? '');
+	const statusMessage = $derived(
+		statusOverride ?? (paid ? 'Payment confirmed!' : 'Confirming payment...'),
+	);
+
 	onMount(() => {
 		loadSurveyOrigin();
 		pageOrigin = window.location.origin;
@@ -41,7 +47,7 @@
 			try {
 				const response = await fetch(`/api/run?runId=${data.runId}`);
 				if (!response.ok) {
-					statusMessage = 'Error checking payment status.';
+					statusOverride = 'Error checking payment status.';
 					pollFailed = true;
 					return;
 				}
@@ -52,15 +58,15 @@
 					// Payment confirmed - fetch the content
 					const downloadResponse = await fetch(`/api/download?runId=${data.runId}`);
 					if (downloadResponse.ok) {
-						content = await downloadResponse.text();
-						paid = true;
-						statusMessage = 'Payment confirmed!';
+						contentOverride = await downloadResponse.text();
+						paidOverride = true;
+						statusOverride = 'Payment confirmed!';
 						return;
 					}
 				}
 
 				// Not paid yet, continue polling
-				statusMessage = `Confirming payment... (${attempt + 1}/${maxAttempts})`;
+				statusOverride = `Confirming payment... (${attempt + 1}/${maxAttempts})`;
 				await new Promise((resolve) => setTimeout(resolve, pollInterval));
 			} catch {
 				// Network error, continue polling
@@ -70,7 +76,7 @@
 
 		// Polling exhausted
 		pollFailed = true;
-		statusMessage = 'Payment confirmation timed out. Please refresh the page.';
+		statusOverride = 'Payment confirmation timed out. Please refresh the page.';
 	};
 
 	const downloadFile = () => {
@@ -99,7 +105,7 @@
 	const refreshStatus = () => {
 		pollFailed = false;
 		pollAttempt = 0;
-		statusMessage = 'Checking payment status...';
+		statusOverride = 'Checking payment status...';
 		pollPaymentStatus();
 	};
 

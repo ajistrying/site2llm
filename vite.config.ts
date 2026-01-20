@@ -1,15 +1,14 @@
 import devtoolsJson from 'vite-plugin-devtools-json';
 import tailwindcss from '@tailwindcss/vite';
+import { playwright } from '@vitest/browser-playwright';
 import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
 
-export default defineConfig(async () => {
+export default defineConfig(() => {
 	const browserEnabled = Boolean(process.env.VITEST_BROWSER);
 	const projects = [];
 
 	if (browserEnabled) {
-		const { playwright } = await import('@vitest/browser-playwright');
-
 		projects.push({
 			extends: './vite.config.ts',
 
@@ -19,7 +18,7 @@ export default defineConfig(async () => {
 				browser: {
 					enabled: true,
 					provider: playwright(),
-					instances: [{ browser: 'chromium', headless: true }]
+					instances: [{ browser: 'chromium' as const, headless: true }]
 				},
 
 				include: ['src/**/*.svelte.{test,spec}.{js,ts}'],

@@ -25,7 +25,7 @@ describe('GET /api/run', () => {
 	it('returns paid false when run is unpaid', async () => {
 		getRun.mockResolvedValueOnce({ paidAt: null });
 		const response = await GET({ url: new URL('http://localhost/api/run?runId=run_1') } as any);
-		const data = await response.json();
+		const data = (await response.json()) as { paid?: boolean };
 
 		expect(response.status).toBe(200);
 		expect(data.paid).toBe(false);
@@ -34,7 +34,7 @@ describe('GET /api/run', () => {
 	it('returns paid true when run is paid', async () => {
 		getRun.mockResolvedValueOnce({ paidAt: new Date() });
 		const response = await GET({ url: new URL('http://localhost/api/run?runId=run_1') } as any);
-		const data = await response.json();
+		const data = (await response.json()) as { paid?: boolean };
 
 		expect(response.status).toBe(200);
 		expect(data.paid).toBe(true);

@@ -29,7 +29,7 @@ export type PageItem = {
 
 export type ValidationErrors = Partial<Record<keyof SurveyInput, string>>;
 
-export const PRICE_USD = 5;
+export const PRICE_USD = 8;
 
 type ExampleLink = {
 	suffix: string;

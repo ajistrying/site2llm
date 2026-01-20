@@ -47,7 +47,7 @@
 		runId: string;
 		preview?: string;
 		lockedPreview?: string;
-		mode?: string;
+		mode?: "stub" | "live" | "";
 		paymentProvider?: string;
 		updatedAt: number;
 		paid?: boolean;
@@ -215,6 +215,9 @@
 			.map((item) => item.trim())
 			.filter((item) => item && !isNoneValue(item));
 
+	const parseCrawlMode = (value: unknown): "stub" | "live" | "" =>
+		value === "stub" || value === "live" ? value : "";
+
 	const normalizeSiteUrl = (value: string) => {
 		const trimmed = value.trim();
 		if (!trimmed) return "";
@@ -310,7 +313,7 @@
 		runId = run.runId;
 		llmsPreview = run.preview ?? "";
 		llmsLocked = run.lockedPreview ?? "";
-		crawlMode = run.mode ?? "";
+		crawlMode = parseCrawlMode(run.mode);
 		paymentProvider = run.paymentProvider ?? "Stripe Checkout";
 		status = "ready";
 		if (message) {
@@ -389,7 +392,7 @@
 						preview: typeof parsed.preview === "string" ? parsed.preview : "",
 						lockedPreview:
 							typeof parsed.lockedPreview === "string" ? parsed.lockedPreview : "",
-						mode: typeof parsed.mode === "string" ? parsed.mode : "",
+						mode: parseCrawlMode(parsed.mode),
 						paymentProvider:
 							typeof parsed.paymentProvider === "string"
 								? parsed.paymentProvider
@@ -413,7 +416,7 @@
 
 			// Handle checkout cancel (user returned from Stripe without paying)
 			if (checkout === "cancel" && checkoutRunId) {
-				const existingRun =
+				const existingRun: StoredRun =
 					storedRun && storedRun.runId === checkoutRunId
 						? storedRun
 						: {
@@ -476,11 +479,16 @@
 						runId?: string;
 						mode?: string;
 						payment?: { provider?: string };
+						error?: string;
 				  }
 				| null;
 			if (!response.ok) {
 				formErrors = (data?.errors ?? {}) as Record<string, string>;
-				statusMessage = "Fix the highlighted fields to generate your llms.txt.";
+				if (Object.keys(formErrors).length > 0) {
+					statusMessage = "Fix the highlighted fields to generate your llms.txt.";
+				} else {
+					statusMessage = data?.error ?? "Generation failed. Try again in a moment.";
+				}
 				status = "error";
 				return;
 			}
@@ -488,7 +496,7 @@
 			llmsPreview = data?.preview ?? "";
 			llmsLocked = data?.lockedPreview ?? "";
 			runId = data?.runId ?? null;
-			crawlMode = data?.mode ?? "";
+			crawlMode = parseCrawlMode(data?.mode);
 			paymentProvider = data?.payment?.provider ?? "Stripe Checkout";
 			status = "ready";
 			if (runId) {
@@ -571,7 +579,7 @@
 <svelte:head>
 	<title>site2llm - llms.txt for AI search</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
 	<link
 		href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;700&family=Space+Grotesk:wght@400;500;600&display=swap"
 		rel="stylesheet"
@@ -1002,7 +1010,7 @@
 					<p class="mt-4 text-[color:var(--muted)]">Generating your llms.txt...</p>
 				{:else if status === "error"}
 					<p class="mt-4 text-[color:var(--muted)]">
-						We could not generate yet. Check the survey fields and try again.
+						{statusMessage || "We could not generate yet. Please try again shortly."}
 					</p>
 				{:else}
 					{#if !llmsPreview}
